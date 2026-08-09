@@ -1,0 +1,20 @@
+{
+  "name": "vocabot",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@grammyjs/conversations": "^2.1.1",
+    "@grammyjs/menu": "^1.4.0",
+    "cron": "^4.4.0",
+    "dotenv": "^17.4.2",
+    "grammy": "^1.45.1",
+    "ioredis": "^6.0.0"
+  }
+}
