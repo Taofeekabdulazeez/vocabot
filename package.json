@@ -1,7 +1,7 @@
 {
   "name": "vocabot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Vocabot is a Telegram bot that helps users improve their English vocabulary through daily words, definitions, examples, and interactive learning exercises.",
   "license": "ISC",
   "author": "",
   "type": "module",
