@@ -3,14 +3,11 @@ dotenv.config();
 import http from "node:http";
 import { Bot, InlineKeyboard } from "grammy";
 import { conversations, createConversation } from "@grammyjs/conversations";
-import { Menu, MenuRange } from "@grammyjs/menu";
 import { Redis } from "ioredis";
 import { CronJob } from "cron";
 
 const bot = new Bot(process.env.BOT_TOKEN);
 const redis = new Redis(process.env.REDIS_CLIENT_URL);
-
-const menu = new Menu("vocabulary_menu", { autoAnswer: false });
 
 async function addVocabulary(conversation, ctx) {
   await ctx.reply(
@@ -29,7 +26,6 @@ async function addVocabulary(conversation, ctx) {
 
 bot.use(conversations());
 bot.use(createConversation(addVocabulary));
-bot.use(menu);
 
 bot.command("start", async (ctx) => {
   await ctx.replyWithChatAction("typing");
@@ -68,35 +64,36 @@ bot.command("random", async (ctx) => {
 bot.command("list", async (ctx) => {
   await ctx.replyWithChatAction("typing");
   const vocabularies = await redis.smembers("vocabularies");
+
   const keyboard = new InlineKeyboard();
 
-  menu.dynamic((ctx, range) => {
-    vocabularies.sort().forEach((word, i) => {
-      range.text(word, async (ctx) => {
-        await ctx.replyWithChatAction("typing");
-        const menu = new InlineKeyboard()
-          .text("Get Meaning", `get_meaning:${word}`)
-          .primary()
-          .text("Remove", `remove:${word}`)
-          .danger();
-
-        await ctx.reply(`What would you like to do with "${word}"?`, {
-          reply_markup: menu,
-        });
-      });
-      if ((i + 1) % 3 === 0) {
-        range.row();
-      }
-    });
+  vocabularies.sort().forEach((word, i) => {
+    keyboard.text(word, `action:${word}`);
+    if ((i + 1) % 3 === 0) {
+      keyboard.row();
+    }
   });
 
-  await ctx.reply("Your vocabulary words:", { reply_markup: menu });
+  await ctx.reply("Your vocabulary words:", { reply_markup: keyboard });
 });
 
 bot.on("callback_query:data", async (ctx) => {
   await ctx.replyWithChatAction("typing");
 
   const data = ctx.callbackQuery.data;
+
+  if (data.startsWith("action:")) {
+    const word = data.split(":")[1];
+    const menu = new InlineKeyboard()
+      .text("Get Meaning", `get_meaning:${word}`)
+      .primary()
+      .text("Remove", `remove:${word}`)
+      .danger();
+    await ctx.reply(`What would you like to do with "${word}"?`, {
+      reply_markup: menu,
+    });
+  }
+
   if (data.startsWith("get_meaning:")) {
     const word = data.split(":")[1];
     const meaning = await getWordMeaning(word);
@@ -127,7 +124,7 @@ bot.catch((err) => {
 async function getWordMeaning(word) {
   try {
     const response = await fetch(
-      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
+      `https://freedictionaryapi.com/api/v1/entries/en/${word}`,
     );
 
     if (!response.ok) {
@@ -136,49 +133,62 @@ async function getWordMeaning(word) {
 
     const data = await response.json();
 
-    const entry = data[0];
-    const meaning = entry.meanings?.[0];
-    const definition = meaning?.definitions?.[0];
-
-    return {
-      word: entry.word,
-      pronunciation: entry.phonetic || entry.phonetics?.[0]?.text || null,
-      partOfSpeech: meaning?.partOfSpeech || null,
-      definition: definition?.definition || null,
-      example: definition?.example || null,
-      synonyms: definition?.synonyms || [],
-    };
+    return data;
   } catch (error) {
     console.error(error.message);
     return null;
   }
 }
 
+/**
+ * Escapes characters that MarkdownV2 treats as special.
+ */
 function escapeMarkdownV2(text) {
   if (!text) return "";
   return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, "\\$&");
 }
 
-function renderWordEntry(entry) {
-  const word = escapeMarkdownV2(entry.word) || "Unknown word";
-  const pronunciation = escapeMarkdownV2(entry.pronunciation);
-  const partOfSpeech = escapeMarkdownV2(entry.partOfSpeech);
+/**
+ * Renders a dictionary API response as a Telegram MarkdownV2 message.
+ */
+function renderWordEntry(data) {
+  const word = escapeMarkdownV2(data?.word) || "Unknown word";
+
+  // Use the first entry (usually the most common part of speech)
+  const entry = data?.entries?.[0];
+
+  const partOfSpeech = escapeMarkdownV2(entry?.partOfSpeech);
+
+  // Grab the first available pronunciation, prefer type "ipa"
+  const pronunciationObj =
+    entry?.pronunciations?.find((p) => p?.type === "ipa") ??
+    entry?.pronunciations?.[0];
+  const pronunciation = escapeMarkdownV2(pronunciationObj?.text);
+
+  const firstSense = entry?.senses?.[0];
   const definition =
-    escapeMarkdownV2(entry.definition) || "No definition available\\.";
-  const example = escapeMarkdownV2(entry.example);
+    escapeMarkdownV2(firstSense?.definition) || "No definition available\\.";
+  const example = escapeMarkdownV2(firstSense?.examples?.[0]);
+
+  // Synonyms can live on the sense or the entry — merge and dedupe
+  const synonymList = [
+    ...(firstSense?.synonyms ?? []),
+    ...(entry?.synonyms ?? []),
+  ].filter(Boolean);
+  const uniqueSynonyms = [...new Set(synonymList)];
 
   let message = `*${word}*`;
   if (pronunciation) message += ` \\(${pronunciation}\\)`;
   message += `\n`;
   if (partOfSpeech) message += `_${partOfSpeech}_\n\n`;
-  message += `${definition}`;
+  message += definition;
 
   if (example) {
     message += `\n\n📌 *Example:*\n${example}`;
   }
 
-  if (entry.synonyms && entry.synonyms.length > 0) {
-    const synonyms = entry.synonyms.map(escapeMarkdownV2).join(", ");
+  if (uniqueSynonyms.length > 0) {
+    const synonyms = uniqueSynonyms.map((s) => escapeMarkdownV2(s)).join(", ");
     message += `\n\n🔄 *Synonyms:* ${synonyms}`;
   }
 
